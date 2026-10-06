@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Classifier (CNN + Transfer Learning)</title>
+<style>
+:root{--bg:#e8edf2;--panel:#f7f9fb;--ink:#13203a;--mute:#5d6b82;--line:#c9d2de;--a:#e0107a;--b:#00899e}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1524;--panel:#16203a;--ink:#e8edf6;--mute:#8e9bb5;--line:#2a3757;--a:#ff4fa3;--b:#2ed3e6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:clamp(2rem,6vw,3rem);margin:8px 0;letter-spacing:-.02em}
+h2{font-size:16px;margin:0 0 8px}
+.sub{color:var(--mute);margin:0 0 16px}a{color:var(--b);font-weight:600}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+button,.btn{display:inline-block;font:600 14px system-ui;border-radius:6px;border:1px solid var(--ink);background:var(--ink);color:var(--panel);padding:7px 12px;cursor:pointer;margin:4px 6px 0 0}
+button.o,.btn.o{background:transparent;color:var(--ink)}
+input[type=text]{font:14px system-ui;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);width:130px}
+input[type=file]{display:none}
+#drop{border:2px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--mute);cursor:pointer}
+#drop.over{border-color:var(--b);color:var(--b)}
+#pic{max-width:100%;max-height:260px;border-radius:8px;display:none;margin:10px auto 0}
+.bar{display:flex;align-items:center;gap:8px;font-size:13px;margin:4px 0}
+.bar span{width:150px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bar i{display:block;height:10px;background:var(--b);border-radius:4px;min-width:2px}
+.bar.mine i{background:var(--a)}
+.crow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.crow small{color:var(--mute);font-family:monospace}
+.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+#status{font-family:monospace;font-size:13px;color:var(--b);margin:0 0 12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Image Classifier</h1>
+  <p class="sub">A real CNN (MobileNet) running in your browser, plus transfer learning so you can teach it your own categories. Back to <a href="digit_recognizer.html">Digit Recognizer</a>.</p>
+  <p id="status">Loading the MobileNet model (needs internet, first time ~10s)...</p>
+  <div class="grid">
+    <div class="card">
+      <h2>1. Classify any image</h2>
+      <label id="drop" for="file">Click to choose an image, or drag and drop one here</label>
+      <input type="file" id="file" accept="image/*">
+      <img id="pic" alt="Your image">
+      <div id="out" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>2. Teach it your own classes</h2>
+      <p class="hint" style="margin-top:0">Give each class a name, then add a few photos to each (5+ per class works well). Then classify an image on the left: pink bars = YOUR classes.</p>
+      <div id="classes"></div>
+      <button class="o" id="addC">+ Add class</button><button class="o" id="reset">Reset my classes</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.6/dist/knn-classifier.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let net, knn;
+const names = ["Class A", "Class B", "Class C"];   // your custom class names
+
+// Turn a chosen file into an <img> element the model can read
+function fileToImg(file) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function boot() {
+  try {
+    net = await mobilenet.load({ version: 2, alpha: 1.0 });   // a pretrained CNN (trained on 1000 everyday categories)
+    knn = knnClassifier.create();                              // a tiny "nearest neighbour" model on top
+    $("status").textContent = "Model ready. Choose an image!";
+  } catch (e) {
+    $("status").textContent = "Could not load the model. Check your internet connection and refresh.";
+  }
+}
+
+// ---------- 1. Classify ----------
+async function classify(file) {
+  if (!net) { alert("Model is still loading, wait a moment."); return; }
+  const img = await fileToImg(file);
+  $("pic").src = img.src; $("pic").style.display = "block";
+  $("out").innerHTML = "Thinking...";
+  let html = "<b>MobileNet says (1000 built-in categories):</b>";
+  const preds = await net.classify(img, 5);                  // CNN forward pass, top 5 guesses
+  html += preds.map(p => bar(p.className, p.probability, "")).join("");
+
+  if (knn.getNumClasses() > 0) {                              // use my own classes too
+    const emb = net.infer(img, true);                         // embedding = the CNN's "summary" of the image (1024 numbers)
+    const total = Object.values(knn.getClassExampleCount()).reduce((a, b) => a + b, 0);
+    const r = await knn.predictClass(emb, Math.min(3, total));
+    emb.dispose();
+    html += "<br><b>Your classes say:</b>";
+    html += Object.keys(r.confidences).map(k => bar(names[+k], r.confidences[k], "mine")).join("");
+  }
+  $("out").innerHTML = html;
+}
+const bar = (label, p, cls) =>
+  `<div class="bar ${cls}"><span title="${label}">${label}</span><i style="width:${p * 180}px"></i>${(p * 100).toFixed(0)}%</div>`;
+
+$("file").onchange = e => e.target.files[0] && classify(e.target.files[0]);
+const drop = $("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) classify(e.dataTransfer.files[0]); };
+
+// ---------- 2. Teach your own classes (transfer learning) ----------
+function counts() {
+  const c = knn ? knn.getClassExampleCount() : {};
+  names.forEach((_, i) => { $("cnt" + i).textContent = (c[i] || 0) + " photos"; });
+}
+
+function addClassRow(i) {
+  const row = document.createElement("div");
+  row.className = "crow";
+  row.innerHTML = `<input type="text" id="nm${i}" value="${names[i]}">
+    <label class="btn o" for="up${i}">Add photos</label>
+    <input type="file" id="up${i}" accept="image/*" multiple>
+    <small id="cnt${i}">0 photos</small>`;
+  $("classes").appendChild(row);
+  $("nm" + i).oninput = e => { names[i] = e.target.value || "Class " + (i + 1); };
+  $("up" + i).onchange = async e => {
+    if (!net) { alert("Model is still loading."); return; }
+    for (const f of e.target.files) {
+      const img = await fileToImg(f);
+      const emb = net.infer(img, true);                       // image -> embedding from the CNN
+      knn.addExample(emb, i);                                 // remember: "this embedding belongs to class i"
+    }
+    e.target.value = ""; counts();
+  };
+}
+names.forEach((_, i) => addClassRow(i));
+$("addC").onclick = () => { names.push("Class " + (names.length + 1)); addClassRow(names.length - 1); };
+$("reset").onclick = () => { if (knn) knn.clearAllClasses(); counts(); };
+
+boot();
+</script>
+</body>
+</html>

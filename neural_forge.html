@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neural Forge v2</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#e8edf2;--panel:#f7f9fb;--ink:#13203a;--mute:#5d6b82;--line:#c9d2de;--a:#e0107a;--b:#00899e;--c:#d98a00;--btn:#13203a;--btnt:#f7f9fb;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1524;--panel:#16203a;--ink:#e8edf6;--mute:#8e9bb5;--line:#2a3757;--a:#ff4fa3;--b:#2ed3e6;--c:#ffc247;--btn:#e8edf6;--btnt:#0e1524}}
+:root[data-theme="dark"]{--bg:#0e1524;--panel:#16203a;--ink:#e8edf6;--mute:#8e9bb5;--line:#2a3757;--a:#ff4fa3;--b:#2ed3e6;--c:#ffc247;--btn:#e8edf6;--btnt:#0e1524}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.5 "Bricolage Grotesque",system-ui,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+h1{font-weight:800;font-size:clamp(2rem,6vw,3.4rem);line-height:1;margin:8px 0;letter-spacing:-.03em}
+.sub{color:var(--mute);margin:0 0 18px}a{color:var(--b);font-weight:600}
+.grid{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px}
+canvas{display:block;width:100%;border-radius:6px;background:var(--bg)}
+#board{aspect-ratio:1;cursor:crosshair;touch-action:none}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 0}
+button,select{font:600 14px "Bricolage Grotesque",sans-serif;border-radius:6px;border:1px solid var(--ink);background:transparent;color:var(--ink);padding:7px 12px;cursor:pointer}
+button.p{background:var(--btn);color:var(--btnt)}button.on{outline:3px solid currentColor;outline-offset:1px}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--b);outline-offset:2px}
+.c0{color:var(--a);border-color:var(--a)}.c1{color:var(--b);border-color:var(--b)}.c2{color:var(--c);border-color:var(--c)}
+label{display:flex;flex-direction:column;gap:2px;font-size:13px;color:var(--mute);min-width:110px;flex:1}
+label.f{flex-direction:row;align-items:center;min-width:0;flex:none;gap:4px;color:var(--ink)}
+label b{font-family:"IBM Plex Mono",monospace;font-weight:500;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--b)}
+.stats{display:flex;gap:16px;flex-wrap:wrap;font-family:"IBM Plex Mono",monospace;font-size:13px;margin-bottom:8px}
+.stats span{color:var(--mute)}.stats b{font-size:20px;color:var(--ink);display:block;font-weight:500}
+h2{font-size:15px;margin:0 0 6px;font-weight:600}.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+textarea{width:100%;height:60px;margin-top:8px;font:12px "IBM Plex Mono",monospace;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Neural Forge v2</h1>
+  <p class="sub">Neural network from scratch, now with test split, feature inputs, L2, SGD/Adam, save/load and 3-class softmax. Same softmax idea powers the <a href="index.html">Digit Recognizer</a> (10 classes).</p>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <canvas id="board" width="560" height="560" aria-label="Decision boundary"></canvas>
+        <div class="row"><button id="k0" class="c0 on">Add pink</button><button id="k1" class="c1">Add teal</button><button id="k2" class="c2">Add amber</button><button id="clr">Clear</button></div>
+        <div class="row" id="sets"></div>
+        <p class="hint">Solid dots = training data. Hollow rings = TEST data (25%), never trained on. If train accuracy is high but test accuracy is low, the network is overfitting.</p>
+      </div>
+      <div class="card"><h2>Save / Load weights</h2>
+        <div class="row" style="margin-top:0"><button id="sv">Save</button><button id="ld">Load</button></div>
+        <textarea id="io" placeholder="Saved JSON appears here. Paste JSON and click Load to restore."></textarea></div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="stats"><div><span>epoch</span><b id="ep">0</b></div><div><span>train loss</span><b id="ls">-</b></div><div><span>train acc</span><b id="ac">-</b></div><div><span>TEST acc</span><b id="ta">-</b></div></div>
+        <canvas id="loss" width="520" height="110" aria-label="Loss"></canvas>
+        <p class="hint">Loss graph: dark = train loss, pink = test loss. Pink rising while dark falls = overfitting.</p>
+        <div class="row"><button id="run" class="p">Pause</button><button id="rst">Reinitialize</button>
+          <select id="actf" aria-label="Activation"><option value="tanh">tanh</option><option value="relu">ReLU</option></select>
+          <select id="opt" aria-label="Optimizer"><option value="adam">Adam</option><option value="sgd">SGD</option></select>
+          <select id="kc" aria-label="Classes"><option value="2">2 classes</option><option value="3">3 classes</option></select></div>
+        <div class="row" id="feats"></div>
+        <div class="row">
+          <label>Hidden layers <b id="hlv">2</b><input id="hl" type="range" min="1" max="5" value="2"></label>
+          <label>Neurons <b id="nnv">8</b><input id="nn" type="range" min="2" max="16" value="8"></label></div>
+        <div class="row">
+          <label>Learning rate <b id="lrv">0.030</b><input id="lr" type="range" min="0.002" max="0.3" step="0.002" value="0.03"></label>
+          <label>L2 regularization <b id="l2v">0.000</b><input id="l2" type="range" min="0" max="0.05" step="0.001" value="0"></label></div>
+      </div>
+      <div class="card"><h2>The network, live</h2><canvas id="net" width="520" height="260" aria-label="Network"></canvas>
+        <p class="hint">Teal = positive weights, pink = negative. Thicker = stronger.</p></div>
+    </div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const rnd=Math.random,gauss=()=>Math.sqrt(-2*Math.log(rnd()+1e-9))*Math.cos(6.2832*rnd());
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+// ---- Feature 2: input features (checkboxes choose what the network sees)
+const FE={x:['x',(x,y)=>x],y:['y',(x,y)=>y],x2:['x²',(x,y)=>x*x],y2:['y²',(x,y)=>y*y],xy:['xy',(x,y)=>x*y],sx:['sin x',(x,y)=>Math.sin(3*x)],sy:['sin y',(x,y)=>Math.sin(3*y)]};
+let on=new Set(['x','y']);
+const fs=()=>Object.keys(FE).filter(k=>on.has(k));
+const inp=(x,y)=>fs().map(k=>FE[k][1](x,y));
+// ---- datasets: [x, y, class]
+const gens={
+ Spiral(){const p=[];for(let c=0;c<2;c++)for(let i=0;i<110;i++){const r=i/110,a=r*3.6*Math.PI+c*Math.PI+gauss()*.06;p.push([.92*r*Math.cos(a),.92*r*Math.sin(a),c])}return p},
+ Circles(){const p=[];for(let i=0;i<200;i++){const c=i%2,r=(c?.75:.3)*(1+gauss()*.06),a=rnd()*6.2832;p.push([r*Math.cos(a),r*Math.sin(a),c])}return p},
+ XOR(){const p=[];for(let i=0;i<200;i++){const x=rnd()*1.8-.9,y=rnd()*1.8-.9;p.push([x,y,x*y>0?0:1])}return p},
+ Moons(){const p=[];for(let i=0;i<200;i++){const c=i%2,a=rnd()*Math.PI,s=c?-1:1;p.push([s*Math.cos(a)*.55-s*.28+gauss()*.05,s*Math.sin(a)*.55-s*.14+gauss()*.05,c])}return p},
+ Spiral3(){const p=[];for(let c=0;c<3;c++)for(let i=0;i<90;i++){const r=i/90,a=r*3.2*Math.PI+c*2.0944+gauss()*.06;p.push([.92*r*Math.cos(a),.92*r*Math.sin(a),c])}return p},
+ Blobs3(){const C=[[-.5,.4],[.5,.4],[0,-.5]],p=[];for(let i=0;i<150;i++){const c=i%3;p.push([C[c][0]+gauss()*.15,C[c][1]+gauss()*.15,c])}return p}
+};
+let data=[],K=2,cls=0,sizes,W,B,mW,vW,mB,vB,t=0,epoch=0,running=true,L1=[],L2=[],sTr=null,sTe=null;
+const board=$('board'),bx=board.getContext('2d'),small=document.createElement('canvas');small.width=small.height=44;const sx=small.getContext('2d');
+function build(){
+ const h=+$('hl').value,n=+$('nn').value;sizes=[fs().length,...Array(h).fill(n),K];
+ const z=f=>sizes.slice(0,-1).map((_,l)=>Array.from({length:sizes[l+1]},()=>Array.from({length:sizes[l]},f)));
+ W=z(()=>0);W.forEach((m,l)=>m.forEach(r=>r.forEach((_,i)=>r[i]=gauss()*Math.sqrt(2/sizes[l]))));
+ mW=z(()=>0);vW=z(()=>0);
+ const zb=()=>sizes.slice(1).map(k=>new Array(k).fill(0));B=zb();mB=zb();vB=zb();
+ t=0;epoch=0;L1=[];L2=[];sTr=sTe=null;
+}
+// ---- forward pass (last layer = softmax, works for 2 or 3 classes)
+function fwd(x){
+ const a=[x],R=$('actf').value==='relu',last=W.length-1;
+ for(let l=0;l<=last;l++){
+  const z=W[l].map((w,j)=>{let s=B[l][j];for(let i=0;i<w.length;i++)s+=w[i]*a[l][i];return s});
+  if(l==last){const m=Math.max(...z),e=z.map(v=>Math.exp(v-m)),S=e.reduce((p,q)=>p+q);a.push(e.map(v=>v/S))}
+  else a.push(z.map(v=>R?Math.max(0,v):Math.tanh(v)));
+ }
+ return a;
+}
+// ---- Feature 1: evaluate loss + accuracy on any set of points
+function ev(s){let L=0,ok=0;for(const [x,y,c] of s){const p=fwd(inp(x,y)).pop();L-=Math.log(p[c]+1e-9);ok+=p.indexOf(Math.max(...p))==c}const n=s.length||1;return[L/n,ok/n]}
+// ---- one training step: backprop + L2 (Feature 3) + SGD/Adam (Feature 4)
+function step(){
+ const tr=data.filter(p=>!p[3]);if(!tr.length)return;
+ const R=$('actf').value==='relu',gW=W.map(m=>m.map(r=>r.map(()=>0))),gB=B.map(b=>b.map(()=>0));
+ for(const [x,y,c] of tr){
+  const a=fwd(inp(x,y));let d=a[a.length-1].map((p,k)=>p-(k==c?1:0)); // softmax + cross-entropy error
+  for(let l=W.length-1;l>=0;l--){
+   const prev=a[l],nd=new Array(prev.length).fill(0);
+   for(let j=0;j<d.length;j++){gB[l][j]+=d[j];for(let i=0;i<prev.length;i++){gW[l][j][i]+=d[j]*prev[i];nd[i]+=d[j]*W[l][j][i]}}
+   if(l>0)for(let i=0;i<nd.length;i++)nd[i]*=R?(prev[i]>0?1:0):1-prev[i]*prev[i];
+   d=nd;
+  }
+ }
+ const n=tr.length,lr=+$('lr').value,lam=+$('l2').value,adam=$('opt').value==='adam';t++;
+ const c1=1-.9**t,c2=1-.999**t;
+ const u=(g,m,v)=>{m=.9*m+.1*g;v=.999*v+.001*g*g;return[m,v,adam?lr*(m/c1)/(Math.sqrt(v/c2)+1e-8):lr*g]};
+ for(let l=0;l<W.length;l++)for(let j=0;j<W[l].length;j++){
+  for(let i=0;i<W[l][j].length;i++){const r=u(gW[l][j][i]/n+lam*W[l][j][i],mW[l][j][i],vW[l][j][i]);mW[l][j][i]=r[0];vW[l][j][i]=r[1];W[l][j][i]-=r[2]}
+  const r=u(gB[l][j]/n,mB[l][j],vB[l][j]);mB[l][j]=r[0];vB[l][j]=r[1];B[l][j]-=r[2];
+ }
+ epoch++;const te=data.filter(p=>p[3]);sTr=ev(tr);sTe=te.length?ev(te):null;
+ L1.push(sTr[0]);if(sTe)L2.push(sTe[0]);if(L1.length>300){L1.shift();L2.shift()}
+}
+// ---- drawing
+function hex(h){h=h.replace('#','');return[0,2,4].map(i=>parseInt(h.substr(i,2),16))}
+function drawBoard(){
+ const cols=['--a','--b','--c'].map(v=>hex(css(v))),bg=hex(css('--panel')),img=sx.createImageData(44,44);
+ for(let py=0;py<44;py++)for(let px=0;px<44;px++){
+  const x=(px+.5)/44*2.2-1.1,y=(py+.5)/44*2.2-1.1,p=fwd(inp(x,y)).pop(),k=(py*44+px)*4;
+  const s=(Math.max(...p)-1/K)/(1-1/K)*.75+.1;
+  for(let q=0;q<3;q++)img.data[k+q]=p.reduce((sum,v,i)=>sum+v*cols[i][q],0)*s+bg[q]*(1-s);
+  img.data[k+3]=255;
+ }
+ sx.putImageData(img,0,0);bx.drawImage(small,0,0,560,560);
+ const m=v=>(v+1.1)/2.2*560;
+ bx.strokeStyle=css('--line');bx.lineWidth=1;bx.beginPath();bx.moveTo(280,0);bx.lineTo(280,560);bx.moveTo(0,280);bx.lineTo(560,280);bx.stroke();
+ for(const [x,y,c,te] of data){const col=css(['--a','--b','--c'][c]);bx.beginPath();bx.arc(m(x),m(y),6,0,6.2832);
+  if(te){bx.lineWidth=3;bx.strokeStyle=col;bx.stroke()}else{bx.fillStyle=col;bx.fill();bx.lineWidth=2;bx.strokeStyle=css('--panel');bx.stroke()}}
+}
+function line(g,arr,mx,col,w,h){if(arr.length<2)return;g.beginPath();arr.forEach((v,i)=>{const x=i/(arr.length-1)*w,y=h-4-(v/mx)*(h-10);i?g.lineTo(x,y):g.moveTo(x,y)});g.strokeStyle=col;g.lineWidth=2;g.stroke()}
+function drawLoss(){
+ const c=$('loss'),g=c.getContext('2d');g.clearRect(0,0,c.width,c.height);
+ const mx=Math.max(...L1,...L2,.7);line(g,L1,mx,css('--ink'),c.width,c.height);line(g,L2,mx,css('--a'),c.width,c.height);
+}
+function drawNet(){
+ const c=$('net'),g=c.getContext('2d'),w=c.width,h=c.height;g.clearRect(0,0,w,h);
+ const pos=sizes.map((n,l)=>Array.from({length:n},(_,i)=>[30+l*(w-60)/(sizes.length-1),h/2+(i-(n-1)/2)*Math.min(26,(h-30)/n)]));
+ for(let l=0;l<W.length;l++)for(let j=0;j<W[l].length;j++)for(let i=0;i<W[l][j].length;i++){
+  const v=W[l][j][i];g.beginPath();g.moveTo(...pos[l][i]);g.lineTo(...pos[l+1][j]);
+  g.strokeStyle=v>0?css('--b'):css('--a');g.globalAlpha=Math.min(.9,.1+Math.abs(v)*.3);g.lineWidth=Math.min(4,.4+Math.abs(v)*1.2);g.stroke();
+ }
+ g.globalAlpha=1;
+ pos.forEach(col=>col.forEach(([x,y])=>{g.beginPath();g.arc(x,y,6,0,6.2832);g.fillStyle=css('--panel');g.fill();g.lineWidth=2;g.strokeStyle=css('--ink');g.stroke()}));
+}
+const pct=v=>v==null?'-':Math.round(v*100)+'%';
+function ui(){$('ep').textContent=epoch;$('ls').textContent=sTr?sTr[0].toFixed(3):'-';$('ac').textContent=pct(sTr&&sTr[1]);$('ta').textContent=pct(sTe&&sTe[1])}
+let frame=0;
+function loop(){if(running)for(let k=0;k<3;k++)step();drawBoard();if(frame++%2==0){drawLoss();drawNet();ui()}requestAnimationFrame(loop)}
+// ---- controls
+function syncCls(){for(let i=0;i<3;i++)$('k'+i).classList.toggle('on',cls==i);$('k2').style.display=K==3?'':'none'}
+function setData(d){data=d.map(p=>[...p,rnd()<.25]);K=Math.max(2,...d.map(p=>p[2]+1));$('kc').value=K;cls=0;syncCls();build()}
+let down=false;
+function pick(e){const r=board.getBoundingClientRect();data.push([((e.clientX-r.left)/r.width)*2.2-1.1,((e.clientY-r.top)/r.height)*2.2-1.1,cls,rnd()<.25])}
+board.addEventListener('pointerdown',e=>{down=true;pick(e)});
+board.addEventListener('pointermove',e=>{if(down&&e.buttons)pick(e)});
+addEventListener('pointerup',()=>down=false);
+for(let i=0;i<3;i++)$('k'+i).onclick=()=>{cls=i;syncCls()};
+$('clr').onclick=()=>data=[];
+$('run').onclick=()=>{running=!running;$('run').textContent=running?'Pause':'Train'};
+$('rst').onclick=build;$('actf').onchange=build;
+$('kc').onchange=()=>{K=+$('kc').value;data=data.filter(p=>p[2]<K);cls=Math.min(cls,K-1);syncCls();build()};
+['hl','nn'].forEach(id=>$(id).oninput=()=>{$(id+'v').textContent=$(id).value;build()});
+$('lr').oninput=()=>$('lrv').textContent=(+$('lr').value).toFixed(3);
+$('l2').oninput=()=>$('l2v').textContent=(+$('l2').value).toFixed(3);
+Object.keys(gens).forEach(k=>{const b=document.createElement('button');b.textContent=k;b.onclick=()=>setData(gens[k]());$('sets').appendChild(b)});
+// feature checkboxes
+Object.keys(FE).forEach(k=>{const l=document.createElement('label');l.className='f';l.innerHTML=`<input type="checkbox" id="f_${k}" ${on.has(k)?'checked':''}> ${FE[k][0]}`;
+ l.firstChild.onchange=e=>{e.target.checked?on.add(k):on.delete(k);if(!on.size){on.add('x');$('f_x').checked=true}build()};$('feats').appendChild(l)});
+// ---- Feature 5: save / load with JSON.stringify
+function save(){const s=JSON.stringify({K,f:fs(),a:$('actf').value,W,B});$('io').value=s;try{localStorage.setItem('nf',s)}catch(e){}}
+function load(){
+ try{const o=JSON.parse($('io').value||localStorage.getItem('nf'));
+  K=o.K;$('kc').value=K;on=new Set(o.f);Object.keys(FE).forEach(k=>$('f_'+k).checked=on.has(k));
+  $('actf').value=o.a;$('hl').value=o.W.length-1;$('nn').value=o.W[0].length;$('hlv').textContent=$('hl').value;$('nnv').textContent=$('nn').value;
+  syncCls();build();W=o.W;B=o.B;
+ }catch(e){alert('Nothing valid to load. Click Save first.')}
+}
+$('sv').onclick=save;$('ld').onclick=load;
+setData(gens.Spiral());loop();
+</script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Image Classifier</title>
+<style>
+:root{--bg:#0b1220;--panel:#141e33;--ink:#e8edf6;--mute:#8e9bb5;--line:#26334f;--a:#ff4fa3;--b:#2ed3e6;--g:#7CFFB2}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#1b2a4d,var(--bg));color:var(--ink);font:16px/1.5 system-ui,sans-serif;min-height:100vh}
+.wrap{max-width:1020px;margin:0 auto;padding:22px 16px 40px}
+h1{font-size:clamp(2rem,6vw,3rem);margin:6px 0;letter-spacing:-.02em}
+h1 span{color:var(--b)}
+.sub{color:var(--mute);margin:0 0 14px}a{color:var(--b);font-weight:600}
+.grid{display:grid;grid-template-columns:1.1fr 1fr;gap:16px}
+@media(max-width:800px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+.stage{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3}
+video,#pic{width:100%;height:100%;object-fit:cover;display:block}
+video{transform:scaleX(-1)}
+#pic{display:none;object-fit:contain}
+#big{position:absolute;left:10px;bottom:10px;background:rgba(0,0,0,.65);padding:6px 14px;border-radius:10px;font-size:22px;font-weight:800;color:var(--g)}
+#ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--mute);text-align:center;padding:20px}
+button,.btn{display:inline-block;font:600 14px system-ui;border-radius:8px;border:1px solid var(--b);background:var(--b);color:#06202a;padding:8px 14px;cursor:pointer;margin:8px 8px 0 0;user-select:none}
+button.o,.btn.o{background:transparent;color:var(--ink);border-color:var(--line)}
+button.sel{background:var(--ink);color:#0b1220;border-color:var(--ink)}
+button.rec{background:var(--a);border-color:var(--a);color:#fff}
+input[type=text]{font:14px system-ui;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#0b1220;color:var(--ink);width:120px}
+input[type=file]{display:none}
+.bar{display:flex;align-items:center;gap:8px;font-size:13px;margin:5px 0}
+.bar span{width:140px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bar i{display:block;height:10px;background:var(--b);border-radius:5px;min-width:2px;transition:width .15s}
+.bar.mine i{background:var(--a)}
+.crow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.crow small{color:var(--mute);font-family:monospace;min-width:70px}
+.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+#status{font-family:monospace;font-size:13px;color:var(--g);margin:0 0 12px}
+h2{font-size:16px;margin:0 0 8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Live Image <span>Classifier</span></h1>
+  <p class="sub">Point your webcam at things and watch a real CNN (MobileNet) recognize them live. Then teach it your own objects in seconds. <a href="digit_recognizer.html">Digit Recognizer</a></p>
+  <p id="status">Loading the MobileNet model (needs internet, ~10s)...</p>
+  <div class="grid">
+    <div class="card">
+      <div class="stage">
+        <video id="cam" autoplay playsinline muted></video>
+        <img id="pic" alt="uploaded">
+        <div id="ph">Click "Start camera" or upload an image</div>
+        <div id="big" style="display:none"></div>
+      </div>
+      <button id="start">Start camera</button>
+      <label class="btn o" for="file">Upload image</label><input type="file" id="file" accept="image/*">
+      <p class="hint">Webcam tip: if the camera won't start, open this file with VS Code's "Live Server" extension (http://localhost) and allow camera access.</p>
+    </div>
+    <div class="card">
+      <div><button id="m0" class="sel">General (1000 objects)</button><button id="m1" class="o">My classes</button></div>
+      <div id="results" style="margin:10px 0 14px;min-height:90px"></div>
+      <h2>Teach it your own classes</h2>
+      <p class="hint" style="margin:0 0 8px">Name a class, point the camera at that object, and <b>hold</b> "Hold to record" for 2 seconds (move it around a little). Do this for 2 or more classes, then switch to "My classes".</p>
+      <div id="classes"></div>
+      <button class="o" id="addC">+ Add class</button><button class="o" id="reset">Reset</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.6/dist/knn-classifier.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const cam = $("cam"), pic = $("pic");
+let net, knn, mode = 0, source = null, rec = null, busy = false;
+const names = ["Class A", "Class B"];
+
+async function boot() {
+  try {
+    net = await mobilenet.load({ version: 2, alpha: 1.0 });   // pretrained CNN
+    knn = knnClassifier.create();                              // small classifier on top (transfer learning)
+    $("status").textContent = "Model ready. Start the camera or upload an image.";
+    loop();
+  } catch (e) { $("status").textContent = "Could not load the model. Check your internet and refresh."; }
+}
+
+// ---------- camera ----------
+$("start").onclick = async () => {
+  try {
+    cam.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 } });
+    await cam.play();
+    pic.style.display = "none"; cam.style.display = "block"; $("ph").style.display = "none";
+    source = cam; $("start").textContent = "Camera on";
+  } catch (e) { alert("Camera not available: " + e.message + "\nTry opening the page via VS Code Live Server."); }
+};
+
+// ---------- upload ----------
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  pic.onload = () => { cam.style.display = "none"; pic.style.display = "block"; $("ph").style.display = "none"; source = pic; };
+  pic.src = URL.createObjectURL(f);
+};
+
+// ---------- the live loop: look at the picture, make a guess ----------
+async function loop() {
+  if (source && !busy && (source !== cam || cam.readyState >= 2)) {
+    busy = true;
+    try { await predict(source); } catch (e) {}
+    busy = false;
+  }
+  setTimeout(loop, 120);   // about 8 guesses per second
+}
+
+async function predict(src) {
+  if (mode === 0) {
+    const preds = await net.classify(src, 5);                 // CNN forward pass
+    show(preds.map(p => [p.className.split(",")[0], p.probability]), "");
+  } else {
+    if (!knn.getNumClasses()) { $("results").innerHTML = '<p class="hint">Record at least 2 classes first (right side).</p>'; $("big").style.display = "none"; return; }
+    const emb = net.infer(src, true);                         // image -> 1024-number embedding
+    const total = Object.values(knn.getClassExampleCount()).reduce((a, b) => a + b, 0);
+    const r = await knn.predictClass(emb, Math.min(5, total)); // vote among nearest examples
+    emb.dispose();
+    show(Object.keys(r.confidences).map(k => [names[+k], r.confidences[k]]).sort((a, b) => b[1] - a[1]), "mine");
+  }
+}
+
+function show(rows, cls) {
+  $("results").innerHTML = rows.map(([l, p]) =>
+    `<div class="bar ${cls}"><span title="${l}">${l}</span><i style="width:${p * 200}px"></i>${(p * 100).toFixed(0)}%</div>`).join("");
+  $("big").style.display = "block";
+  $("big").textContent = rows[0][0] + "  " + Math.round(rows[0][1] * 100) + "%";
+}
+
+$("m0").onclick = () => setMode(0);
+$("m1").onclick = () => setMode(1);
+function setMode(m) { mode = m; $("m0").className = m ? "o" : "sel"; $("m1").className = m ? "sel" : "o"; }
+
+// ---------- teach your own classes: hold the button to record frames ----------
+function counts() {
+  const c = knn ? knn.getClassExampleCount() : {};
+  names.forEach((_, i) => { const el = $("cnt" + i); if (el) el.textContent = (c[i] || 0) + " samples"; });
+}
+function addRow(i) {
+  const row = document.createElement("div"); row.className = "crow";
+  row.innerHTML = `<input type="text" id="nm${i}" value="${names[i]}">
+    <button id="rc${i}">Hold to record</button>
+    <label class="btn o" for="up${i}" style="margin:0">Add photos</label><input type="file" id="up${i}" accept="image/*" multiple>
+    <small id="cnt${i}">0 samples</small>`;
+  $("classes").appendChild(row);
+  // upload photos straight into this class
+  $("up" + i).onchange = async e => {
+    if (!net) { alert("Model is still loading, wait a moment."); return; }
+    for (const f of e.target.files) {
+      const img = new Image();
+      await new Promise(res => { img.onload = res; img.src = URL.createObjectURL(f); });
+      knn.addExample(net.infer(img, true), i);   // photo -> embedding -> remember it as class i
+    }
+    e.target.value = ""; counts();
+  };
+  $("nm" + i).oninput = e => { names[i] = e.target.value || "Class " + (i + 1); };
+  const b = $("rc" + i);
+  const start = e => { e.preventDefault(); if (!source) { alert("Start the camera first."); return; } rec = i; b.classList.add("rec"); };
+  const stop = () => { rec = null; b.classList.remove("rec"); };
+  b.addEventListener("pointerdown", start); addEventListener("pointerup", stop);
+}
+names.forEach((_, i) => addRow(i));
+$("addC").onclick = () => { names.push("Class " + (names.length + 1)); addRow(names.length - 1); };
+$("reset").onclick = () => { if (knn) knn.clearAllClasses(); counts(); };
+
+// while a record button is held, add a new example about 10 times per second
+setInterval(() => {
+  if (rec === null || !net || !source) return;
+  const emb = net.infer(source, true);
+  knn.addExample(emb, rec);          // "this embedding belongs to class rec"
+  counts();
+}, 100);
+
+boot();
+</script>
+</body>
+</html>

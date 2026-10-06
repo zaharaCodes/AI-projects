@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Agent</title>
+<style>
+:root{--bg:#0b1220;--panel:#141e33;--ink:#e8edf6;--mute:#8e9bb5;--line:#26334f;--a:#ff4fa3;--b:#2ed3e6;--g:#7CFFB2;--y:#ffc247}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 10% -10%,#1b2a4d,var(--bg));color:var(--ink);font:16px/1.5 system-ui,sans-serif;min-height:100vh}
+.wrap{max-width:1060px;margin:0 auto;padding:22px 16px 40px}
+h1{font-size:clamp(2rem,6vw,3rem);margin:6px 0;letter-spacing:-.02em}h1 span{color:var(--b)}
+.sub{color:var(--mute);margin:0 0 14px}a{color:var(--b);font-weight:600}
+.loop{display:flex;gap:6px;flex-wrap:wrap;font:600 12px monospace;margin-bottom:14px;color:var(--mute)}
+.loop div{padding:5px 10px;border:1px solid var(--line);border-radius:20px}
+.grid{display:grid;grid-template-columns:340px 1fr;gap:16px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 8px}
+button{font:600 14px system-ui;border-radius:8px;border:1px solid var(--b);background:var(--b);color:#06202a;padding:8px 14px;cursor:pointer;margin:6px 6px 0 0}
+button.o{background:transparent;color:var(--ink);border-color:var(--line);font-weight:500;font-size:13px}
+button:disabled{opacity:.5}
+textarea,input{width:100%;font:14px system-ui;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#0b1220;color:var(--ink)}
+textarea{height:72px;resize:vertical}
+.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+#mode{font:600 12px monospace;color:var(--g)}
+#trace{min-height:300px;max-height:540px;overflow-y:auto}
+.st{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;background:rgba(0,0,0,.2);border-radius:4px;white-space:pre-wrap;word-wrap:break-word}
+.st b{display:block;font:700 11px monospace;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px}
+.Thought{border-color:var(--y)}.Thought b{color:var(--y)}
+.Action{border-color:var(--b)}.Action b{color:var(--b)}
+.Observation{border-color:var(--a)}.Observation b{color:var(--a)}
+.Final{border-color:var(--g)}.Final b{color:var(--g)}
+.Stopped{border-color:var(--a)}
+.tools div{font:13px monospace;color:var(--mute);margin:3px 0}.tools b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI <span>Agent</span></h1>
+  <p class="sub">An agent = an LLM that can use tools in a loop. Watch it think, act, observe, and answer. Back to <a href="chat_with_pdf.html">Chat with PDF</a>.</p>
+  <div class="loop"><div>1 Ask</div><div>2 Think</div><div>3 Pick a tool</div><div>4 Run tool</div><div>5 Observe result</div><div>repeat until done</div><div>Final answer</div></div>
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Give the agent a task</h2>
+        <textarea id="q">What is 1250 * 18, and what time is it right now?</textarea>
+        <div><button id="go">Run agent</button><button class="o" id="clr">Clear</button></div>
+        <p class="hint">Try these:</p>
+        <div id="chips"></div>
+      </div>
+      <div class="card">
+        <h2>Brain <span id="mode"></span></h2>
+        <input type="password" id="key" placeholder="Anthropic API key (optional)" autocomplete="off">
+        <p class="hint">No key: a simple rule-based "demo brain" picks the tools, so you can still see the full loop. With a key: Claude itself decides which tools to call.</p>
+      </div>
+      <div class="card tools"><h2>Tools the agent can use</h2>
+        <div><b>calculator</b>(expression)</div><div><b>get_time</b>()</div><div><b>random_number</b>(min, max)</div><div><b>save_note</b>(text)</div><div><b>list_notes</b>()</div>
+        <h2 style="margin-top:12px">Notes saved by the agent</h2><div id="notes">(none yet)</div>
+      </div>
+    </div>
+    <div class="card"><h2>Agent trace (its reasoning, step by step)</h2><div id="trace"><p class="hint">Click "Run agent".</p></div></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const notes = [];
+
+// ================= TOOLS: plain JavaScript functions the agent may call =================
+const TOOLFN = {
+  calculator({ expression }) {
+    const e = String(expression).replace(/\^/g, "**");
+    if (!/^[\d\s+\-*/().%]+$/.test(e)) throw new Error("Only numbers and + - * / ( ) ^ % are allowed");
+    return +Function('"use strict"; return (' + e + ")")().toFixed(6);
+  },
+  get_time() { return new Date().toLocaleString(); },
+  random_number({ min = 1, max = 100 }) { return Math.floor(Math.random() * (max - min + 1)) + +min; },
+  save_note({ text }) { notes.push(text); renderNotes(); return `Saved as note #${notes.length}`; },
+  list_notes() { return notes.length ? notes.map((n, i) => `#${i + 1}: ${n}`).join("\n") : "No notes yet."; }
+};
+// Tool descriptions: this is what the LLM reads to decide when to use each tool
+const TOOLS = [
+  { name: "calculator", description: "Evaluate a math expression like (12+3)*4. Use for any arithmetic.", input_schema: { type: "object", properties: { expression: { type: "string" } }, required: ["expression"] } },
+  { name: "get_time", description: "Get the current local date and time.", input_schema: { type: "object", properties: {} } },
+  { name: "random_number", description: "Random whole number between min and max (inclusive). Use for dice rolls.", input_schema: { type: "object", properties: { min: { type: "number" }, max: { type: "number" } }, required: ["min", "max"] } },
+  { name: "save_note", description: "Save a short note to the user's notes.", input_schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
+  { name: "list_notes", description: "List all saved notes.", input_schema: { type: "object", properties: {} } }
+];
+const SYS = "You are a helpful agent. Use the tools whenever they help (never do arithmetic in your head). Call tools one step at a time if a later step needs an earlier result. When you have everything, give a short final answer.";
+
+// ================= BRAIN 1: Claude (real LLM decides which tool to call) =================
+async function claudeBrain(messages) {
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": $("key").value.trim(), "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 800, system: SYS, tools: TOOLS, messages })
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message || "API error " + r.status);
+  return j;   // j.content = text blocks and/or tool_use blocks
+}
+
+// ================= BRAIN 2: demo rules (no LLM, same message format as Claude) =================
+function plan(q) {
+  const l = q.toLowerCase(), found = [];
+  const m = q.replace(/[x×]/g, "*").match(/\(*\d[\d\s.+\-*\/()^%]*[\d)]/);
+  if (m && /[+\-*\/^%]/.test(m[0])) found.push({ i: m.index, name: "calculator", input: { expression: m[0].trim() } });
+  let k = l.search(/\b(time|date|today)\b/); if (k >= 0) found.push({ i: k, name: "get_time", input: {} });
+  k = l.search(/\b(roll|dice|random)\b/); if (k >= 0) found.push({ i: k, name: "random_number", input: { min: 1, max: /dice/.test(l) ? 6 : 100 } });
+  const saveRe = /\b(save|remember|note down|add (a )?note)\b/i;
+  k = l.search(saveRe);
+  if (k >= 0) {
+    const rest = q.slice(k).replace(saveRe, "");
+    const text = /\b(it|that|result|answer)\b/i.test(rest) ? "__PREV__" : rest.replace(/^[\s:,-]+/, "").replace(/\b(as a note|in my notes)\b/i, "").trim() || "(empty note)";
+    found.push({ i: k, name: "save_note", input: { text } });
+  }
+  k = l.search(/\b(list|show|read)\b.*\bnotes?\b|\bmy notes\b/); if (k >= 0) found.push({ i: k, name: "list_notes", input: {} });
+  return found.sort((a, b) => a.i - b.i);
+}
+async function demoBrain(msgs) {
+  await sleep(600);
+  const pl = plan(msgs[0].content);
+  const obs = msgs.slice(1).filter(m => m.role === "user").flatMap(m => m.content.map(b => b.content));
+  const n = obs.length;
+  if (!pl.length) return { content: [{ type: "text", text: "My demo brain only understands math, time, dice/random numbers and notes. Add an API key to use Claude as the brain." }] };
+  if (n < pl.length) {
+    let input = pl[n].input;
+    if (input.text === "__PREV__") input = { text: "Result: " + (n ? obs[n - 1] : "(nothing)") };
+    return { content: [{ type: "text", text: `Next I should use the ${pl[n].name} tool.` }, { type: "tool_use", id: "demo" + n, name: pl[n].name, input }] };
+  }
+  return { content: [{ type: "text", text: "Done. " + pl.map((t, i) => `${t.name} gave: ${obs[i]}`).join("  |  ") }] };
+}
+
+// ================= THE AGENT LOOP (this is the important part) =================
+function log(kind, text) {
+  const d = document.createElement("div"); d.className = "st " + kind.split(" ")[0];
+  const b = document.createElement("b"); b.textContent = kind; d.appendChild(b);
+  d.appendChild(document.createTextNode(text)); $("trace").appendChild(d); $("trace").scrollTop = $("trace").scrollHeight;
+}
+async function runAgent(q) {
+  const brain = $("key").value.trim() ? claudeBrain : demoBrain;
+  const messages = [{ role: "user", content: q }];
+  for (let step = 1; step <= 6; step++) {                       // safety limit: max 6 loops
+    const res = await brain(messages);                          // 1. THINK: brain sees the conversation and decides
+    messages.push({ role: "assistant", content: res.content });
+    const calls = res.content.filter(b => b.type === "tool_use");
+    res.content.filter(b => b.type === "text" && b.text.trim()).forEach(b => log(calls.length ? "Thought" : "Final answer", b.text));
+    if (!calls.length) return;                                  // no tool requested = the agent is finished
+    const results = [];
+    for (const c of calls) {
+      log("Action", `${c.name}(${JSON.stringify(c.input)})`);   // 2. ACT: run the chosen tool
+      let out; try { out = String(TOOLFN[c.name](c.input)); } catch (e) { out = "Error: " + e.message; }
+      log("Observation", out);                                  // 3. OBSERVE: show the result
+      results.push({ type: "tool_result", tool_use_id: c.id, content: out });
+    }
+    messages.push({ role: "user", content: results });          // feed results back, then loop again
+  }
+  log("Stopped", "Reached the 6-step limit.");
+}
+
+// ================= UI =================
+function renderNotes() { $("notes").textContent = notes.length ? notes.map((n, i) => `#${i + 1}: ${n}`).join("\n") : "(none yet)"; $("notes").style.whiteSpace = "pre-wrap"; }
+function modeLabel() { $("mode").textContent = $("key").value.trim() ? "(Claude API)" : "(demo rules)"; }
+$("key").oninput = modeLabel; modeLabel();
+$("go").onclick = async () => {
+  const q = $("q").value.trim(); if (!q) return;
+  $("go").disabled = true; $("trace").innerHTML = ""; log("Task", q);
+  try { await runAgent(q); } catch (e) { log("Stopped", "Error: " + e.message); }
+  $("go").disabled = false;
+};
+$("clr").onclick = () => { $("trace").innerHTML = ""; };
+["What is 1250 * 18, and what time is it right now?", "Roll a dice and save the result as a note", "Calculate (45 + 55) * 3 then save it as a note", "Show my notes", "Remember: interview on Friday at 10am"]
+  .forEach(t => { const b = document.createElement("button"); b.className = "o"; b.textContent = t; b.onclick = () => { $("q").value = t; }; $("chips").appendChild(b); });
+</script>
+</body>
+</html>

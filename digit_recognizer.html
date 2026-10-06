@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digit Recognizer (MNIST, from scratch)</title>
+<style>
+:root{--bg:#e8edf2;--panel:#f7f9fb;--ink:#13203a;--mute:#5d6b82;--line:#c9d2de;--a:#e0107a;--b:#00899e}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1524;--panel:#16203a;--ink:#e8edf6;--mute:#8e9bb5;--line:#2a3757;--a:#ff4fa3;--b:#2ed3e6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:clamp(2rem,6vw,3rem);margin:8px 0;letter-spacing:-.02em}
+.sub{color:var(--mute);margin:0 0 16px}a{color:var(--b);font-weight:600}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+canvas{display:block;border-radius:6px;background:#000}
+#chart{width:100%;background:var(--bg)}
+button{font:600 14px system-ui;border-radius:6px;border:1px solid var(--ink);background:var(--ink);color:var(--panel);padding:8px 14px;cursor:pointer;margin:8px 8px 0 0}
+button.o{background:transparent;color:var(--ink)}button:disabled{opacity:.5}
+.stats{display:flex;gap:16px;flex-wrap:wrap;font-family:monospace;font-size:13px;margin:10px 0}
+.stats span{color:var(--mute)}.stats b{display:block;font-size:20px;color:var(--ink)}
+.hint{font-size:13px;color:var(--mute);margin:8px 0 0}
+.bar{display:flex;align-items:center;gap:6px;font:13px monospace;margin:2px 0}
+.bar i{display:block;height:10px;background:var(--b);border-radius:4px}
+#guess{font-size:64px;font-weight:800;color:var(--a);line-height:1}
+.row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Digit Recognizer</h1>
+  <p class="sub">My own neural network (no libraries) learning real handwritten digits (MNIST) in your browser. Needs internet once, to download the dataset. Back to <a href="neural_forge.html">Neural Forge</a>.</p>
+  <div class="grid">
+    <div class="card">
+      <b>Step 1: Train</b>
+      <div><button id="go">Download data and train</button></div>
+      <div class="stats"><div><span>epoch</span><b id="ep">0</b></div><div><span>loss</span><b id="ls">-</b></div><div><span>train acc</span><b id="tra">-</b></div><div><span>TEST acc</span><b id="tea">-</b></div></div>
+      <canvas id="chart" width="440" height="140"></canvas>
+      <p class="hint" id="msg">Dark line = loss (should fall). Teal = test accuracy (should rise).</p>
+    </div>
+    <div class="card">
+      <b>Step 2: Draw a digit (it guesses live)</b>
+      <div class="row" style="margin-top:8px">
+        <div>
+          <canvas id="pad" width="280" height="280" style="cursor:crosshair;touch-action:none;width:240px;height:240px"></canvas>
+          <button class="o" id="clr">Clear</button>
+        </div>
+        <div>
+          <div id="guess">?</div>
+          <div class="hint">What the network sees (28x28):</div>
+          <canvas id="seen" width="84" height="84" style="margin-top:4px"></canvas>
+        </div>
+      </div>
+      <div id="bars" style="margin-top:10px"></div>
+    </div>
+  </div>
+</div>
+<script>
+// ====== Settings you can change and experiment with ======
+const H = 64;          // hidden neurons
+const N_TRAIN = 10000; // training images
+const N_TEST = 1000;   // exam images (never trained on)
+const EPOCHS = 10;     // passes over the data
+const LR = 0.02;       // learning rate
+
+const $ = id => document.getElementById(id);
+const gauss = () => Math.sqrt(-2 * Math.log(Math.random() + 1e-9)) * Math.cos(6.2832 * Math.random());
+
+// ====== The network: 784 pixels -> H hidden (ReLU) -> 10 outputs (softmax) ======
+let W1, b1, W2, b2, trained = false;
+const h = new Float32Array(H), o = new Float32Array(10), d2 = new Float32Array(10), dh = new Float32Array(H);
+
+function init() {
+  W1 = new Float32Array(784 * H).map(() => gauss() * Math.sqrt(2 / 784)); // He initialization
+  b1 = new Float32Array(H);
+  W2 = new Float32Array(H * 10).map(() => gauss() * Math.sqrt(2 / H));
+  b2 = new Float32Array(10);
+}
+
+// FORWARD PASS: pixels -> guess (10 probabilities)
+function forward(x) {
+  for (let j = 0; j < H; j++) h[j] = b1[j];
+  for (let i = 0; i < 784; i++) {
+    const v = x[i]; if (v === 0) continue;       // skip black pixels (speed-up)
+    const r = i * H;
+    for (let j = 0; j < H; j++) h[j] += v * W1[r + j];
+  }
+  for (let j = 0; j < H; j++) if (h[j] < 0) h[j] = 0;   // ReLU
+  let m = -1e9;
+  for (let k = 0; k < 10; k++) {
+    let s = b2[k];
+    for (let j = 0; j < H; j++) s += h[j] * W2[j * 10 + k];
+    o[k] = s; if (s > m) m = s;
+  }
+  let S = 0;
+  for (let k = 0; k < 10; k++) { o[k] = Math.exp(o[k] - m); S += o[k]; }  // softmax
+  for (let k = 0; k < 10; k++) o[k] /= S;
+  return o;
+}
+
+// BACKPROPAGATION + GRADIENT DESCENT for one image (y = the true digit)
+function backward(x, y) {
+  for (let k = 0; k < 10; k++) d2[k] = o[k] - (k === y ? 1 : 0);   // output error
+  for (let j = 0; j < H; j++) {                                    // send error back
+    let s = 0;
+    if (h[j] > 0) for (let k = 0; k < 10; k++) s += W2[j * 10 + k] * d2[k];
+    dh[j] = s;
+  }
+  for (let j = 0; j < H; j++) {                                    // update layer 2
+    if (h[j] === 0) continue;
+    for (let k = 0; k < 10; k++) W2[j * 10 + k] -= LR * h[j] * d2[k];
+  }
+  for (let k = 0; k < 10; k++) b2[k] -= LR * d2[k];
+  for (let i = 0; i < 784; i++) {                                  // update layer 1
+    const v = x[i]; if (v === 0) continue;
+    const r = i * H;
+    for (let j = 0; j < H; j++) W1[r + j] -= LR * v * dh[j];
+  }
+  for (let j = 0; j < H; j++) b1[j] -= LR * dh[j];
+}
+
+// ====== Load the real MNIST dataset ======
+async function loadMnist() {
+  const img = new Image(); img.crossOrigin = "anonymous";
+  const loaded = new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+  img.src = "https://storage.googleapis.com/learnjs-data/model-builder/mnist_images.png";
+  const labP = fetch("https://storage.googleapis.com/learnjs-data/model-builder/mnist_labels_uint8")
+    .then(r => r.arrayBuffer()).then(b => new Uint8Array(b));
+  await loaded;
+  const n = N_TRAIN + N_TEST;
+  const c = document.createElement("canvas"); c.width = 784; c.height = n;
+  const g = c.getContext("2d");
+  g.drawImage(img, 0, 0, 784, n, 0, 0, 784, n);        // one image per row of the sprite
+  const px = g.getImageData(0, 0, 784, n).data;
+  const X = new Float32Array(n * 784);
+  for (let i = 0; i < X.length; i++) X[i] = px[i * 4] / 255;   // 0 = black, 1 = white
+  const lab = await labP, Y = new Uint8Array(n);
+  for (let i = 0; i < n; i++) { let best = 0; for (let k = 1; k < 10; k++) if (lab[i * 10 + k] > lab[i * 10 + best]) best = k; Y[i] = best; }
+  return { X, Y };
+}
+
+function accuracy(X, Y, from, to) {
+  let ok = 0;
+  for (let i = from; i < to; i++) { const p = forward(X.subarray(i * 784, (i + 1) * 784)); ok += p.indexOf(Math.max(...p)) === Y[i]; }
+  return ok / (to - from);
+}
+
+const tick = () => new Promise(r => setTimeout(r, 0));
+const hist = { loss: [], test: [] };
+
+async function train() {
+  $("go").disabled = true; $("msg").textContent = "Downloading MNIST dataset...";
+  let data;
+  try { data = await loadMnist(); }
+  catch (e) { $("msg").textContent = "Could not download the dataset. Check your internet and try again."; $("go").disabled = false; return; }
+  const { X, Y } = data;
+  init(); hist.loss = []; hist.test = [];
+  for (let e = 1; e <= EPOCHS; e++) {
+    const order = Array.from({ length: N_TRAIN }, (_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    let L = 0;
+    for (const n of order) {
+      const x = X.subarray(n * 784, (n + 1) * 784);
+      forward(x); L -= Math.log(o[Y[n]] + 1e-9); backward(x, Y[n]);
+    }
+    const te = accuracy(X, Y, N_TRAIN, N_TRAIN + N_TEST), tr = accuracy(X, Y, 0, 1000);
+    hist.loss.push(L / N_TRAIN); hist.test.push(te);
+    $("ep").textContent = e; $("ls").textContent = (L / N_TRAIN).toFixed(3);
+    $("tra").textContent = Math.round(tr * 100) + "%"; $("tea").textContent = (te * 100).toFixed(1) + "%";
+    $("msg").textContent = `Training... epoch ${e}/${EPOCHS}`;
+    drawChart(); await tick();
+  }
+  trained = true; $("go").disabled = false; $("go").textContent = "Train again";
+  $("msg").textContent = "Done! Now draw a digit on the right.";
+}
+
+function drawChart() {
+  const c = $("chart"), g = c.getContext("2d"), w = c.width, hh = c.height;
+  g.clearRect(0, 0, w, hh);
+  const line = (arr, mx, col) => {
+    g.beginPath();
+    arr.forEach((v, i) => { const x = 10 + i * (w - 20) / (EPOCHS - 1), y = hh - 8 - (v / mx) * (hh - 16); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.strokeStyle = col; g.lineWidth = 2; g.stroke();
+  };
+  line(hist.loss, Math.max(...hist.loss), getComputedStyle(document.body).color);
+  line(hist.test, 1, "#00a5bd");
+}
+
+// ====== Drawing pad + converting a drawing into MNIST style ======
+const pad = $("pad"), pg = pad.getContext("2d");
+let drawing = false;
+function clearPad() { pg.fillStyle = "#000"; pg.fillRect(0, 0, 280, 280); $("guess").textContent = "?"; $("bars").innerHTML = ""; $("seen").getContext("2d").clearRect(0, 0, 84, 84); }
+clearPad();
+pg.strokeStyle = "#fff"; pg.lineWidth = 22; pg.lineCap = "round"; pg.lineJoin = "round";
+const pos = e => { const r = pad.getBoundingClientRect(); return [(e.clientX - r.left) * 280 / r.width, (e.clientY - r.top) * 280 / r.height]; };
+pad.addEventListener("pointerdown", e => { drawing = true; pg.beginPath(); pg.moveTo(...pos(e)); });
+pad.addEventListener("pointermove", e => { if (drawing) { pg.lineTo(...pos(e)); pg.stroke(); predictDrawing(); } });
+addEventListener("pointerup", () => { drawing = false; });
+$("clr").onclick = clearPad;
+
+// MNIST digits are scaled to 20x20 and centred by centre-of-mass inside 28x28. We do the same.
+function padToInput() {
+  const d = pg.getImageData(0, 0, 280, 280).data;
+  let x0 = 280, y0 = 280, x1 = -1, y1 = -1;
+  for (let y = 0; y < 280; y++) for (let x = 0; x < 280; x++)
+    if (d[(y * 280 + x) * 4] > 40) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return null;
+  const w = x1 - x0 + 1, hh = y1 - y0 + 1, s = 20 / Math.max(w, hh);
+  const t = document.createElement("canvas"); t.width = t.height = 28;
+  const g = t.getContext("2d"); g.fillStyle = "#000"; g.fillRect(0, 0, 28, 28);
+  g.drawImage(pad, x0, y0, w, hh, (28 - w * s) / 2, (28 - hh * s) / 2, w * s, hh * s);
+  const a = g.getImageData(0, 0, 28, 28).data; let m = 0, cx = 0, cy = 0;
+  for (let y = 0; y < 28; y++) for (let x = 0; x < 28; x++) { const v = a[(y * 28 + x) * 4]; m += v; cx += v * x; cy += v * y; }
+  const t2 = document.createElement("canvas"); t2.width = t2.height = 28;
+  const g2 = t2.getContext("2d"); g2.fillStyle = "#000"; g2.fillRect(0, 0, 28, 28);
+  g2.drawImage(t, Math.round(14 - cx / m), Math.round(14 - cy / m));
+  const b = g2.getImageData(0, 0, 28, 28).data, x = new Float32Array(784);
+  for (let i = 0; i < 784; i++) x[i] = b[i * 4] / 255;
+  const sc = $("seen").getContext("2d"); sc.imageSmoothingEnabled = false; sc.drawImage(t2, 0, 0, 84, 84);
+  return x;
+}
+
+function predictDrawing() {
+  if (!trained) return;
+  const x = padToInput(); if (!x) return;
+  const p = Array.from(forward(x));
+  $("guess").textContent = p.indexOf(Math.max(...p));
+  $("bars").innerHTML = p.map((v, i) => `<div class="bar">${i} <i style="width:${v * 220}px"></i> ${(v * 100).toFixed(0)}%</div>`).join("");
+}
+
+$("go").onclick = train;
+</script>
+</body>
+</html>
